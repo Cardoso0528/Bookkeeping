@@ -1,68 +1,42 @@
+import os
+import glob
 import pdfplumber
-import re
 from datetime import datetime
+from parsers import AVAILABLE_PARSERS
 
 def extract_transactions_from_pdf(pdf_path):
     """Extract raw transaction data from PDF statement"""
+    print("\nAnalyzing statement format...")
     
+    # Extract first 1000 characters for format detection
     with pdfplumber.open(pdf_path) as pdf:
+        # Extract all text from the PDF
         all_text = ""
         for page in pdf.pages:
-            all_text += page.extract_text() or ""
-            all_text += "\n--- PAGE BREAK ---\n"
+            page_text = page.extract_text() or ""
+            all_text += page_text + "\n"
+        
+        print("\nFull statement text:")
+        print("-" * 50)
+        print(all_text)
+        print("-" * 50)
     
-    # Headers to look for transaction sections
-    headers = [
-        "ATM/DebitCard transactionsthisstatementperiod",
-        "ATM/DebitCard transactionsthisstatementperiod(continued)"
-    ]
+    for parser_class in AVAILABLE_PARSERS:
+        print(f"\nTrying {parser_class.__name__}...")
+        parser = parser_class(pdf_path)
+        if parser.detect_format():
+            print(f"Success! Detected format: {parser_class.__name__}")
+            transactions = parser.extract_transactions()
+            if transactions:
+                print(f"Found {len(transactions)} transactions")
+                return transactions
+            else:
+                print("No transactions found in the statement")
+        else:
+            print(f"{parser_class.__name__} did not match")
     
-    # Stop at this section to avoid picking up other types of transactions
-    stop_header = "Electronicwithdrawalsthisstatementperiod"
-    stop_index = all_text.find(stop_header)
-    if stop_index != -1:
-        search_text = all_text[:stop_index]
-    else:
-        search_text = all_text
-    
-    # Extract transaction sections
-    sections = []
-    for header in headers:
-        pattern = re.compile(rf"{header}(.*?)(\n[A-Z][A-Z /]+\n|--- PAGE BREAK ---|$)", re.DOTALL)
-        matches = pattern.findall(search_text)
-        for match in matches:
-            section = match[0].strip()
-            if section:
-                sections.append(section)
-    
-    if not sections:
-        print("ATM/Debit Card transactions section not found.")
-        return []
-    
-    combined_section = "\n".join(sections)
-    lines = [line.strip() for line in combined_section.splitlines() if line.strip()]
-    
-    # Parse individual transactions
-    # Pattern: Date (e.g., Dec02) Amount (e.g., -45.67 or -1,526.13) Description
-    transaction_pattern = re.compile(r"^(?P<date>[A-Za-z]{3}\d{2})\s+(?P<amount>-?\d{1,3}(?:,\d{3})*\.\d{2})\s+(?P<description>.+)")
-    
-    transactions = []
-    for line in lines:
-        match = transaction_pattern.match(line)
-        if match:
-            date_str = match.group('date')
-            amount_str = match.group('amount').replace(',', '')  # Remove commas before converting to float
-            amount = float(amount_str)
-            description = match.group('description').strip()
-            
-            transactions.append({
-                'date': date_str,
-                'amount': amount,
-                'description': description,
-                'raw_line': line
-            })
-    
-    return transactions
+    print("\nUnknown bank statement format. Please implement a new parser for this format.")
+    return []
 
 def print_transactions(transactions):
     """Print transactions in a clean format"""
@@ -72,12 +46,12 @@ def print_transactions(transactions):
     
     print(f"\nFound {len(transactions)} transactions:")
     print("-" * 80)
-    print(f"{'Date':<8} {'Amount':<12} {'Description'}")
+    print(f"{'Date':<12} {'Amount':<12} {'Description'}")
     print("-" * 80)
     
     for txn in transactions:
         amount_str = f"${txn['amount']:.2f}"
-        print(f"{txn['date']:<8} {amount_str:<12} {txn['description']}")
+        print(f"{txn['date']:<12} {amount_str:<12} {txn['description']}")
 
 def save_transactions_to_csv(transactions, filename="transactions.csv"):
     """Save transactions to CSV file"""
@@ -97,22 +71,6 @@ def save_transactions_to_csv(transactions, filename="transactions.csv"):
     
     print(f"\nTransactions saved to {filename}")
 
-def filter_transactions(transactions, min_amount=None, max_amount=None, search_term=None):
-    """Filter transactions based on criteria"""
-    filtered = transactions
-    
-    if min_amount is not None:
-        filtered = [t for t in filtered if abs(t['amount']) >= min_amount]
-    
-    if max_amount is not None:
-        filtered = [t for t in filtered if abs(t['amount']) <= max_amount]
-    
-    if search_term:
-        search_term = search_term.lower()
-        filtered = [t for t in filtered if search_term in t['description'].lower()]
-    
-    return filtered
-
 def group_transactions_by_merchant(transactions):
     """Group transactions by merchant and sum amounts"""
     from collections import defaultdict
@@ -123,31 +81,12 @@ def group_transactions_by_merchant(transactions):
         # Extract merchant name (first word or first few words)
         description = txn['description']
         
-        # Try to identify merchant patterns (check Uber BEFORE general * pattern)
-        if 'Uber' in description or 'UberTrip' in description:
-            # All Uber services (Uber, UberTrip, UberTechnologies)
-            merchant = "Uber (All Services)"
-        elif description.startswith('Qt'):
-            # All QuikTrip locations
-            merchant = "QuikTrip (All Locations)"
-        elif description.startswith('Discount'):
-            # Discount Tire
-            merchant = "Discount Tire"
-        elif '*' in description:
+        # Try to identify merchant patterns
+        if '*' in description:
             # For services like "Lyft *1Ride12-29" 
             merchant = description.split('*')[0].strip()
-        elif description.startswith('W/DAt'):
-            # ATM withdrawals
-            merchant = "ATM Withdrawal"
-        elif 'Vehreg' in description:
-            # Vehicle registration
-            merchant = "Vehicle Registration"
-        elif '.gov' in description:
-            # Government services
-            merchant = "Government Services"
-        elif 'BankFee' in description or 'ATMUsageFee' in description:
-            # Bank fees
-            merchant = "Bank Fees"
+        elif description.startswith('Check #'):
+            merchant = "Checks"
         else:
             # General case: take first word or meaningful part
             words = description.split()
@@ -211,66 +150,114 @@ def print_grouped_transactions(merchant_totals, show_details=False):
 
 # Main execution
 if __name__ == "__main__":
-    pdf_path = "Statements.pdf"
+    # Look for PDF files in the statements directory
+    statements_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "statements")  # Absolute path to statements directory
+    pdf_files = glob.glob(os.path.join(statements_dir, "*.pdf"))
     
-    # Extract transactions
-    print("Extracting transactions from PDF...")
-    transactions = extract_transactions_from_pdf(pdf_path)
+    # Sort files by modification time (newest first)
+    pdf_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
     
-    if not transactions:
-        print("No transactions found. Check your PDF format or headers.")
+    if not pdf_files:
+        print(f"No PDF files found in {statements_dir} directory.")
+        print("Please place your bank statement PDF files in the statements/ directory.")
         exit()
     
-    # Display all transactions
-    print_transactions(transactions)
+    print(f"\nFound {len(pdf_files)} PDF files in {statements_dir}:")
+    for i, pdf_file in enumerate(pdf_files, 1):
+        size = os.path.getsize(pdf_file) / 1024  # Convert to KB
+        print(f"{i}. {os.path.basename(pdf_file)} ({size:.1f}KB)")
     
-    # Show some basic stats
-    total_amount = sum(txn['amount'] for txn in transactions)
-    debits = [txn for txn in transactions if txn['amount'] < 0]
-    credits = [txn for txn in transactions if txn['amount'] > 0]
+    # If multiple PDF files found, let user choose
+    if len(pdf_files) > 1:
+        while True:
+            try:
+                choice = input(f"\nSelect a file (1-{len(pdf_files)}) or 'all' to process all files: ").strip()
+                if choice.lower() == 'all':
+                    selected_files = pdf_files
+                    break
+                else:
+                    choice_num = int(choice)
+                    if 1 <= choice_num <= len(pdf_files):
+                        selected_files = [pdf_files[choice_num - 1]]
+                        break
+                    else:
+                        print(f"Please enter a number between 1 and {len(pdf_files)}")
+            except ValueError:
+                print("Please enter a valid number or 'all'")
+    else:
+        selected_files = pdf_files
+        print(f"Processing: {os.path.basename(pdf_files[0])}")
     
-    print(f"\nSummary:")
-    print(f"Total transactions: {len(transactions)}")
-    print(f"Debits: {len(debits)} (${sum(t['amount'] for t in debits):.2f})")
-    print(f"Credits: {len(credits)} (${sum(t['amount'] for t in credits):.2f})")
-    print(f"Net amount: ${total_amount:.2f}")
+    # Process each selected file
+    all_transactions = []
+    
+    for pdf_path in selected_files:
+        filename = os.path.basename(pdf_path)
+        print(f"\n{'='*60}")
+        print(f"Processing: {filename}")
+        print(f"{'='*60}")
+        
+        # Extract transactions
+        transactions = extract_transactions_from_pdf(pdf_path)
+        
+        if not transactions:
+            print(f"No transactions found in {filename}.")
+            continue
+        
+        # Display transactions for this file
+        print_transactions(transactions)
+        
+        # Show some basic stats for this file
+        total_amount = sum(txn['amount'] for txn in transactions)
+        debits = [txn for txn in transactions if txn['amount'] < 0]
+        credits = [txn for txn in transactions if txn['amount'] > 0]
+        
+        print(f"\nSummary for {filename}:")
+        print(f"Total transactions: {len(transactions)}")
+        print(f"Debits: {len(debits)} (${sum(t['amount'] for t in debits):.2f})")
+        print(f"Credits: {len(credits)} (${sum(t['amount'] for t in credits):.2f})")
+        print(f"Net amount: ${total_amount:.2f}")
+        
+        # Add transactions to overall list
+        all_transactions.extend(transactions)
+    
+    # If processing multiple files, show combined summary
+    if len(selected_files) > 1:
+        print(f"\n{'='*60}")
+        print(f"COMBINED SUMMARY ({len(selected_files)} files)")
+        print(f"{'='*60}")
+        
+        total_amount = sum(txn['amount'] for txn in all_transactions)
+        debits = [txn for txn in all_transactions if txn['amount'] < 0]
+        credits = [txn for txn in all_transactions if txn['amount'] > 0]
+        
+        print(f"Total transactions: {len(all_transactions)}")
+        print(f"Debits: {len(debits)} (${sum(t['amount'] for t in debits):.2f})")
+        print(f"Credits: {len(credits)} (${sum(t['amount'] for t in credits):.2f})")
+        print(f"Net amount: ${total_amount:.2f}")
+    
+    # Use all_transactions for further processing
+    transactions_to_process = all_transactions if len(selected_files) > 1 else transactions
     
     # Optional: Save to CSV
     save_to_csv = input("\nSave transactions to CSV? (y/n): ").lower().strip()
     if save_to_csv == 'y':
-        save_transactions_to_csv(transactions)
+        if len(selected_files) == 1:
+            filename = os.path.splitext(os.path.basename(selected_files[0]))[0] + "_transactions.csv"
+        else:
+            filename = "combined_transactions.csv"
+        save_transactions_to_csv(transactions_to_process, filename)
     
     # Optional: Filter and group transactions
     filter_choice = input("\nFilter or group transactions? (y/n): ").lower().strip()
     if filter_choice == 'y':
         print("\nOptions:")
-        print("1. Filter by search term")
-        print("2. Group all transactions by merchant")
-        print("3. Filter then group")
+        print("1. Group all transactions by merchant")
+        print("2. Show transaction details")
         
-        choice = input("Choose option (1-3): ").strip()
+        choice = input("Choose option (1-2): ").strip()
         
         if choice == '1':
-            search_term = input("Search term: ").strip()
-            if search_term:
-                filtered = filter_transactions(transactions, search_term=search_term)
-                print(f"\nFiltered results for '{search_term}':")
-                print_transactions(filtered)
-        
-        elif choice == '2':
-            merchant_totals = group_transactions_by_merchant(transactions)
+            merchant_totals = group_transactions_by_merchant(transactions_to_process)
             show_details = input("Show individual transaction details? (y/n): ").lower().strip() == 'y'
             print_grouped_transactions(merchant_totals, show_details)
-        
-        elif choice == '3':
-            search_term = input("Search term for filtering: ").strip()
-            if search_term:
-                filtered = filter_transactions(transactions, search_term=search_term)
-                print(f"\nFiltered results for '{search_term}':")
-                print_transactions(filtered)
-                
-                group_filtered = input(f"\nGroup the {len(filtered)} filtered transactions? (y/n): ").lower().strip()
-                if group_filtered == 'y':
-                    merchant_totals = group_transactions_by_merchant(filtered)
-                    show_details = input("Show individual transaction details? (y/n): ").lower().strip() == 'y'
-                    print_grouped_transactions(merchant_totals, show_details)
