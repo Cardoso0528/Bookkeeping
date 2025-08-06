@@ -1,0 +1,431 @@
+{% extends "base.html" %}
+
+{% block title %}{{ filename }} - Bank Statement Analyzer{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="{{ url_for('index') }}" class="btn btn-secondary">&larr; Back to Statements</a>
+</div>
+
+<h1>{{ filename }}</h1>
+<p>Format detected: {{ format }}</p>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Summary</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <tr>
+                        <th>Total Transactions:</th>
+                        <td>{{ summary.total_transactions }}</td>
+                    </tr>
+                    <tr>
+                        <th>Credits:</th>
+                        <td>
+                            {{ summary.total_credits }} transactions
+                            <span class="positive">${{ "%.2f"|format(summary.credit_amount) }}</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Debits:</th>
+                        <td>
+                            {{ summary.total_debits }} transactions
+                            <span class="negative">${{ "%.2f"|format(summary.debit_amount) }}</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Net Amount:</th>
+                        <td>
+                            <span class="{{ 'positive' if summary.total_amount >= 0 else 'negative' }}">
+                                ${{ "%.2f"|format(summary.total_amount) }}
+                            </span>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<h2>Transactions</h2>
+<div class="table-responsive">
+    <table id="transactions-table" class="table table-striped">
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Description</th>
+                <th>Amount</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for txn in transactions %}
+            <tr>
+                <td>{{ txn.date }}</td>
+                <td>
+                    <span class="badge {% if txn.type == 'deposit' %}bg-success
+                                     {% elif txn.type == 'withdrawal' %}bg-danger
+                                     {% elif txn.type == 'transfer' %}bg-info
+                                     {% elif txn.type == 'check' %}bg-warning
+                                     {% elif txn.type == 'fee' %}bg-dark
+                                     {% else %}bg-secondary{% endif %}">
+                        {{ txn.type|title }}
+                    </span>
+                </td>
+                <td>{{ txn.description }}</td>
+                <td class="currency {{ 'positive' if txn.amount >= 0 else 'negative' }}">
+                    ${{ "%.2f"|format(txn.amount) }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <tfoot>
+            <tr>
+                <th colspan="3">Total</th>
+                <td class="currency {{ 'positive' if summary.total_amount >= 0 else 'negative' }}">
+                    ${{ "%.2f"|format(summary.total_amount) }}
+                </td>
+            </tr>
+        </tfoot>
+    </table>
+</div>
+
+<div class="mt-4">
+    <h3>Detailed Transaction Analysis</h3>
+
+    <!-- Chart Section -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h4 class="mb-0">Transaction Overview</h4>
+        </div>
+        <div class="card-body">
+            <canvas id="transaction-chart" width="400" height="200"></canvas>
+        </div>
+    </div>
+
+    <!-- Deposits Section -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h4 class="mb-0">Deposits</h4>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <h5>All Deposits</h5>
+                    <p>
+                        Count: {{ detailed_analysis.deposits.all.count }}<br>
+                        Total: <span class="positive">${{ "%.2f"|format(detailed_analysis.deposits.all.total) }}</span>
+                    </p>
+                </div>
+                <div class="col-md-6">
+                    <h5>Paper Deposits</h5>
+                    <p>
+                        Count: {{ detailed_analysis.deposits.paper.count }}<br>
+                        Total: <span class="positive">${{ "%.2f"|format(detailed_analysis.deposits.paper.total) }}</span>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Electronic Withdrawals Section -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h4 class="mb-0">Electronic Withdrawals</h4>
+        </div>
+        <div class="card-body">
+            <h5>Wire Transfers</h5>
+            <p>
+                Count: {{ detailed_analysis.electronic_withdrawals.wire_transfers.count }}<br>
+                Total: <span class="negative">${{ "%.2f"|format(detailed_analysis.electronic_withdrawals.wire_transfers.total) }}</span>
+            </p>
+
+            <h5 class="mt-4">Auto Payments</h5>
+            <div class="row">
+                {% for name, data in detailed_analysis.electronic_withdrawals.auto_payments.items() %}
+                <div class="col-md-4 mb-3">
+                    <div class="card">
+                        <div class="card-body">
+                            <h6 class="card-title">{{ name|replace('_', ' ')|title }}</h6>
+                            <p class="card-text">
+                                Count: {{ data.count }}<br>
+                                Total: <span class="negative">${{ "%.2f"|format(data.total) }}</span>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Checks Section -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h4 class="mb-0">Checks</h4>
+        </div>
+        <div class="card-body">
+            <p>
+                Count: {{ detailed_analysis.checks.count }}<br>
+                Total: <span class="negative">${{ "%.2f"|format(detailed_analysis.checks.total) }}</span>
+            </p>
+        </div>
+    </div>
+
+    <!-- Fees Section -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h4 class="mb-0">Fees and Services</h4>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-4">
+                    <h5>Service Charges</h5>
+                    <p>
+                        Count: {{ detailed_analysis.fees.service_charges.count }}<br>
+                        Total: <span class="negative">${{ "%.2f"|format(detailed_analysis.fees.service_charges.total) }}</span>
+                    </p>
+                </div>
+                <div class="col-md-4">
+                    <h5>Returned Item Fees</h5>
+                    <p>
+                        Count: {{ detailed_analysis.fees.returned_item_fees.count }}<br>
+                        Total: <span class="negative">${{ "%.2f"|format(detailed_analysis.fees.returned_item_fees.total) }}</span>
+                    </p>
+                </div>
+                <div class="col-md-4">
+                    <h5>Overdraft Fees</h5>
+                    <p>
+                        Count: {{ detailed_analysis.fees.overdraft_fees.count }}<br>
+                        Total: <span class="negative">${{ "%.2f"|format(detailed_analysis.fees.overdraft_fees.total) }}</span>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Transaction Details Section -->
+<div class="mt-4">
+    <h3>Transaction Details</h3>
+    <div class="accordion" id="transactionAccordion">
+        <!-- Deposits -->
+        <div class="accordion-item">
+            <h2 class="accordion-header">
+                <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseDeposits">
+                    Deposits
+                </button>
+            </h2>
+            <div id="collapseDeposits" class="accordion-collapse collapse show" data-bs-parent="#transactionAccordion">
+                <div class="accordion-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Description</th>
+                                    <th>Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for txn in detailed_analysis.deposits.all.transactions %}
+                                <tr>
+                                    <td>{{ txn.date }}</td>
+                                    <td>{{ txn.description }}</td>
+                                    <td class="positive">${{ "%.2f"|format(txn.amount) }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Wire Transfers -->
+        <div class="accordion-item">
+            <h2 class="accordion-header">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseWires">
+                    Wire Transfers
+                </button>
+            </h2>
+            <div id="collapseWires" class="accordion-collapse collapse" data-bs-parent="#transactionAccordion">
+                <div class="accordion-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Description</th>
+                                    <th>Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for txn in detailed_analysis.electronic_withdrawals.wire_transfers.transactions %}
+                                <tr>
+                                    <td>{{ txn.date }}</td>
+                                    <td>{{ txn.description }}</td>
+                                    <td class="negative">${{ "%.2f"|format(txn.amount) }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Fees -->
+        <div class="accordion-item">
+            <h2 class="accordion-header">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseFees">
+                    Fees and Services
+                </button>
+            </h2>
+            <div id="collapseFees" class="accordion-collapse collapse" data-bs-parent="#transactionAccordion">
+                <div class="accordion-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Description</th>
+                                    <th>Amount</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for txn in detailed_analysis.fees.service_charges.transactions + 
+                                           detailed_analysis.fees.returned_item_fees.transactions +
+                                           detailed_analysis.fees.overdraft_fees.transactions %}
+                                <tr>
+                                    <td>{{ txn.date }}</td>
+                                    <td>{{ txn.description }}</td>
+                                    <td class="negative">${{ "%.2f"|format(txn.amount) }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    // Initialize DataTables
+    $('#transactions-table').DataTable({
+        order: [[0, 'asc']], // Sort by date by default
+        pageLength: 50,
+        dom: 'Bfrtip',
+        buttons: [
+            'copy', 'csv', 'excel', 'pdf', 'print'
+        ]
+    });
+
+    // Initialize all detail tables
+    $('.detail-table').DataTable({
+        order: [[0, 'asc']],
+        pageLength: 10,
+        dom: 'frtip'
+    });
+
+    // Format all currency values
+    $('.currency').each(function() {
+        const amount = parseFloat($(this).text().replace('$', '').replace(',', ''));
+        $(this).text('$' + amount.toLocaleString('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }));
+    });
+
+    // Add hover effects to category cards
+    $('.category-card').hover(
+        function() { $(this).addClass('shadow-sm'); },
+        function() { $(this).removeClass('shadow-sm'); }
+    );
+
+    // Initialize tooltips
+    $('[data-bs-toggle="tooltip"]').tooltip();
+
+    // Add click handlers for transaction type filtering
+    $('.transaction-filter').click(function(e) {
+        e.preventDefault();
+        const type = $(this).data('type');
+        const table = $('#transactions-table').DataTable();
+        table.column(1).search(type).draw();
+    });
+
+    // Add chart visualization
+    const ctx = document.getElementById('transaction-chart');
+    if (ctx) {
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['Deposits', 'Wire Transfers', 'Auto Payments', 'Checks', 'Fees'],
+                datasets: [{
+                    label: 'Transaction Amounts',
+                    data: [
+                        {{ detailed_analysis.deposits.all.total }},
+                        {{ detailed_analysis.electronic_withdrawals.wire_transfers.total }},
+                        {% set auto_total = 0 %}
+                        {% for _, data in detailed_analysis.electronic_withdrawals.auto_payments.items() %}
+                            {% set auto_total = auto_total + data.total %}
+                        {% endfor %}
+                        {{ auto_total }},
+                        {{ detailed_analysis.checks.total }},
+                        {% set fees_total = detailed_analysis.fees.service_charges.total +
+                                          detailed_analysis.fees.returned_item_fees.total +
+                                          detailed_analysis.fees.overdraft_fees.total %}
+                        {{ fees_total }}
+                    ],
+                    backgroundColor: [
+                        'rgba(40, 167, 69, 0.5)',  // green for deposits
+                        'rgba(0, 123, 255, 0.5)',  // blue for wires
+                        'rgba(255, 193, 7, 0.5)',  // yellow for auto payments
+                        'rgba(108, 117, 125, 0.5)', // gray for checks
+                        'rgba(220, 53, 69, 0.5)'   // red for fees
+                    ],
+                    borderColor: [
+                        'rgb(40, 167, 69)',
+                        'rgb(0, 123, 255)',
+                        'rgb(255, 193, 7)',
+                        'rgb(108, 117, 125)',
+                        'rgb(220, 53, 69)'
+                    ],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) {
+                                return '$' + value.toLocaleString();
+                            }
+                        }
+                    }
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return '$' + context.raw.toLocaleString();
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+});
+</script>
+{% endblock %}

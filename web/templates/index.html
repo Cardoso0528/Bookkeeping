@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}Bank Statements - Bank Statement Analyzer{% endblock %}
+
+{% block content %}
+<h1>Bank Statements</h1>
+
+<div class="table-responsive">
+    <table id="statements-table" class="table table-striped">
+        <thead>
+            <tr>
+                <th>Statement</th>
+                <th>Size</th>
+                <th>Last Modified</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for statement in statements %}
+            <tr>
+                <td>{{ statement.name }}</td>
+                <td>{{ statement.size }}</td>
+                <td>{{ statement.modified }}</td>
+                <td>
+                    <a href="{{ url_for('statement_details', filename=statement.name) }}" 
+                       class="btn btn-primary btn-sm">View</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    $('#statements-table').DataTable({
+        order: [[2, 'desc']], // Sort by modified date by default
+        pageLength: 25
+    });
+});
+</script>
+{% endblock %}
